@@ -5,18 +5,54 @@
  * Run with: php -S 0.0.0.0:80 file_manager.php
  */
 
+// Start session for authentication
+session_start();
+
 // Configuration
 $UPLOAD_DIR = __DIR__ . '/uploads';
 $MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB
 $ALLOWED_EXTENSIONS = []; // Empty array = allow all extensions
+$PASSWORD = 'changeme'; // Change this to your desired password
 
 // Create uploads directory if it doesn't exist
 if (!is_dir($UPLOAD_DIR)) {
     mkdir($UPLOAD_DIR, 0755, true);
 }
 
+// Authentication functions
+function isAuthenticated() {
+    return isset($_SESSION['authenticated']) && $_SESSION['authenticated'] === true;
+}
+
+function requireAuth() {
+    if (!isAuthenticated()) {
+        http_response_code(403);
+        die('Access denied. Please log in.');
+    }
+}
+
+// Handle login
+$login_error = '';
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['login'])) {
+    if (isset($_POST['password']) && $_POST['password'] === $PASSWORD) {
+        $_SESSION['authenticated'] = true;
+        header('Location: ' . $_SERVER['PHP_SELF']);
+        exit;
+    } else {
+        $login_error = 'Incorrect password. Please try again.';
+    }
+}
+
+// Handle logout
+if (isset($_GET['logout'])) {
+    session_destroy();
+    header('Location: ' . $_SERVER['PHP_SELF']);
+    exit;
+}
+
 // Handle file download
 if (isset($_GET['download']) && !empty($_GET['download'])) {
+    requireAuth();
     $filename = basename($_GET['download']);
     $filepath = $UPLOAD_DIR . '/' . $filename;
     
@@ -37,6 +73,7 @@ $upload_message = '';
 $upload_error = '';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['file'])) {
+    requireAuth();
     if ($_FILES['file']['error'] === UPLOAD_ERR_OK) {
         $filename = basename($_FILES['file']['name']);
         $filepath = $UPLOAD_DIR . '/' . $filename;
@@ -63,12 +100,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['file'])) {
             }
         }
     } else {
-        $upload_error = 'Upload error: ' . $_FILES['file']['error'];
+        // Provide detailed error messages
+        $error_messages = [
+            UPLOAD_ERR_INI_SIZE => 'File exceeds upload_max_filesize (' . ini_get('upload_max_filesize') . ')',
+            UPLOAD_ERR_FORM_SIZE => 'File exceeds MAX_FILE_SIZE directive in HTML form',
+            UPLOAD_ERR_PARTIAL => 'File was only partially uploaded',
+            UPLOAD_ERR_NO_FILE => 'No file was uploaded',
+            UPLOAD_ERR_NO_TMP_DIR => 'Missing temporary folder',
+            UPLOAD_ERR_CANT_WRITE => 'Failed to write file to disk',
+            UPLOAD_ERR_EXTENSION => 'A PHP extension stopped the file upload'
+        ];
+        
+        $error_code = $_FILES['file']['error'];
+        $upload_error = 'Upload error: ' . (isset($error_messages[$error_code]) 
+            ? $error_messages[$error_code] 
+            : 'Unknown error (code: ' . $error_code . ')');
+        
+        // Additional diagnostic info
+        $upload_error .= '<br><small>PHP Limits: upload_max_filesize=' . ini_get('upload_max_filesize') . 
+                        ', post_max_size=' . ini_get('post_max_size') . 
+                        ', max_execution_time=' . ini_get('max_execution_time') . 's</small>';
     }
 }
 
 // Handle file deletion
 if (isset($_GET['delete']) && !empty($_GET['delete'])) {
+    requireAuth();
     $filename = basename($_GET['delete']);
     $filepath = $UPLOAD_DIR . '/' . $filename;
     
@@ -81,9 +138,9 @@ if (isset($_GET['delete']) && !empty($_GET['delete'])) {
     }
 }
 
-// Get list of files
+// Get list of files (only if authenticated)
 $files = [];
-if (is_dir($UPLOAD_DIR)) {
+if (isAuthenticated() && is_dir($UPLOAD_DIR)) {
     $items = scandir($UPLOAD_DIR);
     foreach ($items as $item) {
         if ($item !== '.' && $item !== '..') {
@@ -299,6 +356,52 @@ function formatBytes($bytes, $precision = 2) {
             display: block;
             margin-bottom: 15px;
         }
+        
+        .login-section {
+            max-width: 400px;
+            margin: 0 auto;
+            padding: 40px 0;
+        }
+        
+        .login-section h2 {
+            margin-bottom: 20px;
+            color: #333;
+            text-align: center;
+        }
+        
+        input[type="password"] {
+            width: 100%;
+            padding: 12px;
+            border: 2px solid #dee2e6;
+            border-radius: 6px;
+            font-size: 16px;
+            margin-bottom: 15px;
+        }
+        
+        input[type="password"]:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+        
+        .logout-section {
+            text-align: right;
+            margin-bottom: 20px;
+        }
+        
+        .btn-logout {
+            background: #6c757d;
+            color: white;
+            padding: 8px 20px;
+            text-decoration: none;
+            border-radius: 6px;
+            font-size: 14px;
+            display: inline-block;
+        }
+        
+        .btn-logout:hover {
+            background: #5a6268;
+            transform: none;
+        }
     </style>
 </head>
 <body>
@@ -309,6 +412,29 @@ function formatBytes($bytes, $precision = 2) {
         </div>
         
         <div class="content">
+            <?php if (!isAuthenticated()): ?>
+                <!-- Login Form -->
+                <div class="login-section">
+                    <h2>🔒 Login Required</h2>
+                    
+                    <?php if ($login_error): ?>
+                        <div class="message error"><?php echo $login_error; ?></div>
+                    <?php endif; ?>
+                    
+                    <form method="POST">
+                        <div class="form-group">
+                            <input type="password" name="password" placeholder="Enter password" required autofocus>
+                        </div>
+                        <button type="submit" name="login">Login</button>
+                    </form>
+                </div>
+            <?php else: ?>
+                <!-- Logout Button -->
+                <div class="logout-section">
+                    <a href="?logout=1" class="btn-logout">Logout</a>
+                </div>
+                
+                <!-- File Manager Content -->
             <!-- Upload Section -->
             <div class="upload-section">
                 <h2>Upload File</h2>
@@ -327,6 +453,39 @@ function formatBytes($bytes, $precision = 2) {
                     </div>
                     <button type="submit">Upload File</button>
                 </form>
+            </div>
+            
+            <!-- PHP Configuration Diagnostics -->
+            <div class="upload-section" style="background: #fff3cd; border: 1px solid #ffc107;">
+                <h2>📊 PHP Upload Configuration</h2>
+                <table style="width: 100%; border-collapse: collapse;">
+                    <tr>
+                        <td style="padding: 8px; font-weight: 600;">upload_max_filesize:</td>
+                        <td style="padding: 8px;"><?php echo ini_get('upload_max_filesize'); ?></td>
+                    </tr>
+                    <tr>
+                        <td style="padding: 8px; font-weight: 600;">post_max_size:</td>
+                        <td style="padding: 8px;"><?php echo ini_get('post_max_size'); ?> 
+                            <small style="color: #666;">(must be ≥ upload_max_filesize)</small></td>
+                    </tr>
+                    <tr>
+                        <td style="padding: 8px; font-weight: 600;">max_execution_time:</td>
+                        <td style="padding: 8px;"><?php echo ini_get('max_execution_time'); ?> seconds</td>
+                    </tr>
+                    <tr>
+                        <td style="padding: 8px; font-weight: 600;">memory_limit:</td>
+                        <td style="padding: 8px;"><?php echo ini_get('memory_limit'); ?></td>
+                    </tr>
+                    <tr>
+                        <td style="padding: 8px; font-weight: 600;">Application Limit:</td>
+                        <td style="padding: 8px;"><?php echo formatBytes($MAX_FILE_SIZE); ?></td>
+                    </tr>
+                </table>
+                <p style="margin-top: 15px; font-size: 14px; color: #856404;">
+                    <strong>Note:</strong> If your file is 2.6MB and upload fails, check that <code>upload_max_filesize</code> and <code>post_max_size</code> are both at least 3M or higher.
+                    To fix, edit your <code>php.ini</code> file or create a <code>.htaccess</code> file with:
+                    <code style="display: block; margin-top: 5px; padding: 5px; background: white; border-radius: 4px;">php_value upload_max_filesize 10M<br>php_value post_max_size 10M</code>
+                </p>
             </div>
             
             <!-- Files List Section -->
@@ -365,6 +524,7 @@ function formatBytes($bytes, $precision = 2) {
                     </table>
                 <?php endif; ?>
             </div>
+            <?php endif; ?>
         </div>
     </div>
 </body>
